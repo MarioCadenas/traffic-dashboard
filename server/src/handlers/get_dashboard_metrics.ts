@@ -1,41 +1,67 @@
 
+import { db } from '../db';
+import { trafficDataTable } from '../db/schema';
 import { type DashboardMetrics, type DateRangeInput } from '../schema';
+import { gte, lte, and, desc } from 'drizzle-orm';
+import { SQL } from 'drizzle-orm';
 
 export async function getDashboardMetrics(input?: DateRangeInput): Promise<DashboardMetrics> {
-    // This is a placeholder declaration! Real code should be implemented here.
-    // The goal of this handler is aggregating traffic data for dashboard visualization.
-    // It should:
-    // 1. Filter traffic data by date range if provided
-    // 2. Aggregate time series data for line charts (page views, unique visitors, bounce rate)
-    // 3. Sum traffic sources for pie chart (direct, organic, referral, social)
-    // 4. Calculate summary statistics (totals and averages)
+  try {
+    // Build conditions array
+    const conditions: SQL<unknown>[] = [];
     
-    // Generate simulated data for demonstration
-    const timeSeriesData = [];
-    const today = new Date();
-    
-    for (let i = 29; i >= 0; i--) {
-        const date = new Date(today);
-        date.setDate(date.getDate() - i);
-        
-        timeSeriesData.push({
-            date: date.toISOString().split('T')[0], // Format as YYYY-MM-DD
-            page_views: Math.floor(Math.random() * 1000) + 500,
-            unique_visitors: Math.floor(Math.random() * 400) + 200,
-            bounce_rate: Math.floor(Math.random() * 40) + 30 // 30-70%
-        });
+    if (input?.startDate) {
+      conditions.push(gte(trafficDataTable.date, input.startDate.toISOString().split('T')[0]));
     }
     
-    return Promise.resolve({
-        timeSeriesData,
-        trafficSources: {
-            direct: Math.floor(Math.random() * 5000) + 2000,
-            organic_search: Math.floor(Math.random() * 8000) + 4000,
-            referral: Math.floor(Math.random() * 3000) + 1000,
-            social: Math.floor(Math.random() * 2000) + 500
-        },
-        totalPageViews: timeSeriesData.reduce((sum, day) => sum + day.page_views, 0),
-        totalUniqueVisitors: timeSeriesData.reduce((sum, day) => sum + day.unique_visitors, 0),
-        averageBounceRate: timeSeriesData.reduce((sum, day) => sum + day.bounce_rate, 0) / timeSeriesData.length
-    } as DashboardMetrics);
+    if (input?.endDate) {
+      conditions.push(lte(trafficDataTable.date, input.endDate.toISOString().split('T')[0]));
+    }
+
+    // Build and execute query in a single chain without reassignment
+    const trafficData = conditions.length > 0
+      ? await db.select()
+          .from(trafficDataTable)
+          .where(conditions.length === 1 ? conditions[0] : and(...conditions))
+          .orderBy(desc(trafficDataTable.date))
+          .execute()
+      : await db.select()
+          .from(trafficDataTable)
+          .orderBy(desc(trafficDataTable.date))
+          .execute();
+
+    // Convert numeric fields and prepare time series data
+    const timeSeriesData = trafficData.map(row => ({
+      date: row.date, // Already a string in YYYY-MM-DD format from date column
+      page_views: row.page_views,
+      unique_visitors: row.unique_visitors,
+      bounce_rate: parseFloat(row.bounce_rate) // Convert numeric to number
+    }));
+
+    // Calculate traffic sources totals
+    const trafficSources = {
+      direct: trafficData.reduce((sum, row) => sum + row.direct_traffic, 0),
+      organic_search: trafficData.reduce((sum, row) => sum + row.organic_search, 0),
+      referral: trafficData.reduce((sum, row) => sum + row.referral_traffic, 0),
+      social: trafficData.reduce((sum, row) => sum + row.social_traffic, 0)
+    };
+
+    // Calculate summary statistics
+    const totalPageViews = trafficData.reduce((sum, row) => sum + row.page_views, 0);
+    const totalUniqueVisitors = trafficData.reduce((sum, row) => sum + row.unique_visitors, 0);
+    const averageBounceRate = trafficData.length > 0 
+      ? trafficData.reduce((sum, row) => sum + parseFloat(row.bounce_rate), 0) / trafficData.length
+      : 0;
+
+    return {
+      timeSeriesData,
+      trafficSources,
+      totalPageViews,
+      totalUniqueVisitors,
+      averageBounceRate
+    };
+  } catch (error) {
+    console.error('Dashboard metrics retrieval failed:', error);
+    throw error;
+  }
 }
